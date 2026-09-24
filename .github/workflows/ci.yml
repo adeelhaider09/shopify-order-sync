@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  e2e:
+    # Same code against a real Postgres server, with the API and worker running as separate processes.
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: order_sync
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/order_sync
+      SHOPIFY_WEBHOOK_SECRET: ci-webhook-secret
+      API_TOKEN: ci-api-token-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node dist/migrate-main.js
+      - name: Start API and worker
+        run: |
+          node dist/server.js > api.log 2>&1 &
+          node dist/worker-main.js > worker.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:3000/healthz && exit 0; sleep 1; done
+          cat api.log; exit 1
+      - run: node scripts/smoke.mjs
+      - if: failure()
+        run: cat api.log worker.log

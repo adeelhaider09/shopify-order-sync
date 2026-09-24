@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: order_sync
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 20
+
+  migrate:
+    build: .
+    command: node dist/migrate-main.js
+    environment: &env
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/order_sync
+      SHOPIFY_WEBHOOK_SECRET: ${SHOPIFY_WEBHOOK_SECRET:-dev-secret}
+      API_TOKEN: ${API_TOKEN:-dev-api-token-change-me}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    build: .
+    command: node dist/server.js
+    environment: *env
+    ports: ["3000:3000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: .
+    command: node dist/worker-main.js
+    environment: *env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
